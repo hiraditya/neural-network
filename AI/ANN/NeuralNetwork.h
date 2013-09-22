@@ -6,11 +6,17 @@
 
 #include<vector>
 #include<list>
+#include<set>
 #include<algorithm>
 #include<cassert>
 #include<numeric>
 #include<cmath>
-
+/**
+ * TODO: Serialization
+ *
+ *
+ *
+ */
 
 namespace ANN {
 
@@ -26,7 +32,11 @@ namespace ANN {
 
   template<typename WeightType>
   inline bool Valid(WeightType& w) {
-    return w >= 0;
+    return true;
+  }
+
+  inline bool IsRootNeuron(IdType Id) {
+    return Id == 0;
   }
 
   // @todo Reimplement this.
@@ -56,6 +66,18 @@ namespace ANN {
                 DendronWeightType w)
       : Id(i), In(in), Out(out), W(w){
         assert(In && Out);
+    }
+
+    void SetWeight(DendronWeightType w) {
+      assert(Valid(w));
+      W = w;
+    }
+
+    // This function should be used to set negative weight
+    // of bias neurons.
+    void SetBiasWeight(DendronWeightType w) {
+      //assert(Valid(w));
+      W = w;
     }
 
     bool operator==(const DendronType& d) const {
@@ -154,19 +176,29 @@ namespace ANN {
       return Direction::InvalidDirection;
     }
 
-    DendronWeightType EvalOp(InputVector& ip) {
-      assert(ip.size() == Ins.size());
-      auto d = Ins.begin();
-      auto i = ip.begin();
-      DendronWeightType Sum = 0;
-      while(d != Ins.end()) {
-        Sum += (*i) * (*d)->W;
-        ++d;
-        ++i;
+    // To be used by the inner neurons only.
+    DendronWeightType EvalOp() {
+      assert(!IsRootNeuron(Id) &&
+          "Cannot use this function for root neurons");
+      auto d_it = Ins.begin();
+      DendronWeightType Sum(0);
+      while(d_it != Ins.end()) {
+        DendronType* d = *d_it;
+        Sum += d->W*d->In->GetWeight();
+        ++d_it;
       }
+      W = Sum;
       return Sum;
     }
 
+    virtual NeuronWeightType GetWeight() const {
+      return W;
+    }
+
+    std::ostream& operator<<(std::ostream& os) {
+      Print(os);
+      return os;
+    }
     template<typename Stream>
     void Print(Stream& s) {
       s << "\n\tn" << Id
@@ -177,6 +209,7 @@ namespace ANN {
 
   typedef std::list<NeuronType> NeuronsType;
   typedef std::list<NeuronType*> NeuronsRefType;
+  typedef std::set<NeuronType*> NeuronsRefSetType; 
   typedef std::list<DendronType> DendronsType;
   /**
    *   ,--In--Cen---  -----
@@ -203,9 +236,11 @@ namespace ANN {
         RootNeuron = &*Neurons.begin();
       }
 
+      // Root (the placeholder) has unit weight
+      // so that evaluating subsequent stages becomes regular.
       NeuronsType::iterator CreateRoot() {
         assert(RootNeuron == NULL);
-        CreateNeuron();
+        CreateNeuron(1);
         RootNeuron = &*Neurons.begin();
         return Neurons.begin();
       }
@@ -314,6 +349,45 @@ namespace ANN {
         Dendrons.erase(it);
       }
 
+      NeuronWeightType GetOutput(const std::vector<DendronWeightType>& Ins) {
+        assert(RootNeuron->Outs.size() == Ins.size());
+        auto ip = Ins.begin();
+        NeuronsRefSetType NeuronRefs;
+        // Root. First propagate the input multiplied by
+        // input dendron weights to the layer 1 neurons.
+        NeuronType* Current = RootNeuron;
+        std::for_each(Current->Outs.begin(), Current->Outs.end(),
+            [&NeuronRefs, &ip, this](DendronType* d) {
+              d->Out->SetWeight((*ip)*d->W);
+              DEBUG1(dbgs() << "\nWt: " << d->W << ", ip:" << *ip;
+                d->Out->Print(dbgs()););
+              std::for_each(d->Out->Outs.begin(), d->Out->Outs.end(),
+                   [&](DendronType* din){ NeuronRefs.insert(din->Out); });
+              ++ip;
+            });
+        NeuronsRefSetType InNeuronRefs1, InNeuronRefs2 = NeuronRefs;
+        while(InNeuronRefs2.size() > 1) {
+          // TODO: Optimize this. Get a pointer to the neuron being
+          // inserted to and check for size() > 1 using the pointer
+          // to the set. That way I can avoid a copy.
+          InNeuronRefs1 = InNeuronRefs2;
+          DEBUG1(dbgs() << "\nPrinting the neurons inserted:";
+            std::for_each(InNeuronRefs2.begin(), InNeuronRefs2.end(),
+              [&](NeuronType* np){ np->Print(dbgs()); dbgs() << " "; });
+          );
+
+          InNeuronRefs2.clear();
+          std::for_each(InNeuronRefs1.begin(), InNeuronRefs1.end(),
+              [&](NeuronType* N) {
+                N->EvalOp();
+                std::for_each(N->Outs.begin(), N->Outs.end(),
+                     [&](DendronType* din){ InNeuronRefs2.insert(din->Out); });
+            });
+        };
+        assert(InNeuronRefs2.size() == 1);
+        return (*InNeuronRefs2.begin())->EvalOp();
+      }
+
       template<typename Stream>
       void PrintNetwork(Stream& s, std::string Title) {
         s << "digraph " << Title << "{\n";
@@ -332,7 +406,7 @@ namespace ANN {
       void PrintDendron(Stream& s, DendronType& d) {
         s << "\n\tn" << d.In->Id
           << "->n" << d.Out->Id
-          << "[ label = \" d" << d.Id << " (" << d.W<< ")\"];";
+          << "[ label = \"d" << d.Id << "(" << d.W<< ")\"];";
       }
 
       // Breadth First traversal of network
@@ -349,6 +423,7 @@ namespace ANN {
       void PrintNNDigraph(NeuronType& root, Stream& s,
                            const std::string& Name= "") {
         s << "digraph " << Name <<  " {\n";
+        PrintNeurons(s);
         PrintConnections(root, s);
         s << "\n}\n";
       }
@@ -364,9 +439,9 @@ namespace ANN {
     RNG rnd(0, 1);
     NeuralNetwork nn;
     auto root = nn.CreateRoot();
-    auto out = nn.CreateNeuron(rnd.Get());
+    auto out = nn.CreateNeuron(0);
     for (unsigned i = 0; i < NumNeurons; ++i) {
-      auto in = nn.CreateNeuron(rnd.Get());
+      auto in = nn.CreateNeuron(0);
       nn.Connect(root, in, rnd.Get());
       nn.Connect(in, out, rnd.Get());
     }
@@ -383,10 +458,10 @@ namespace ANN {
     RNG rnd(0, 1);
     NeuralNetwork nn;
     auto root = nn.CreateRoot();
-    auto out = nn.CreateNeuron(rnd.Get());
+    auto out = nn.CreateNeuron(0);
     for (unsigned i = 0; i < NumNeurons; ++i) {
-      auto in1 = nn.CreateNeuron(rnd.Get());
-      auto in2 = nn.CreateNeuron(rnd.Get());
+      auto in1 = nn.CreateNeuron(0);
+      auto in2 = nn.CreateNeuron(0);
       nn.Connect(root, in1, rnd.Get());
       nn.Connect(in1, in2, rnd.Get());
       nn.Connect(in2, out, rnd.Get());

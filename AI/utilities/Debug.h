@@ -39,9 +39,27 @@
 #endif
 
 #include<iostream>
+#include<algorithm>
+
 std::ostream& dbgs()
 {
   return std::cout;
+}
+
+template<typename T>
+void PrintElements(std::ostream& os, const T& t) {
+  std::for_each(t.begin(), t.end(), [&os](typename T::value_type v){
+      os << v << " ";
+      });
+  os << "\n";
+}
+
+template<typename T>
+void PrintPointees(std::ostream& os, const T& t) {
+  std::for_each(t.begin(), t.end(), [&os](typename T::value_type v){
+      os << *v << " ";
+      });
+  os << "\n";
 }
 
 #endif // ANN_DEBUG_H
