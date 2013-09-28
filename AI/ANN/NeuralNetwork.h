@@ -5,6 +5,8 @@
 #include<RandomGenerator.h>
 #include<Activation.h>
 #include<TrainingAlgorithms.h>
+#include<TypeConversions.h>
+#include<Distance.h>
 
 #include<vector>
 #include<list>
@@ -15,9 +17,11 @@
 #include<cmath>
 /**
  * TODO: Serialization
- *
- *
- *
+ * Abstract breadth first traversal from train-network and
+ * depth first traversal from print-network.
+ * Facility to report statistics. Helper class that one could
+ * call at various stages to log the state of neural network.
+ * Ability to parse parameters from command line.
  */
 
 namespace ANN {
@@ -27,8 +31,6 @@ namespace ANN {
   typedef WeightType NeuronWeightType;
   typedef unsigned LevelType;
   typedef unsigned IdType;
-
-  static WeightType FPDelta = 0.000001;
   typedef std::vector<WeightType> InputVector;
   struct NeuronType;
 
@@ -53,6 +55,8 @@ namespace ANN {
     Outwards
   };
 
+  utilities::FloatingPointDistance DendronDist;
+  utilities::FloatingPointDistance NeuronDist;
   // Represents one denron. Each dendron must be
   // connected to two neurons.
   //template<typename DendronWeightType>
@@ -77,14 +81,11 @@ namespace ANN {
 
     // This function should be used to set negative weight
     // of bias neurons.
-    void SetBiasWeight(DendronWeightType w) {
-      //assert(Valid(w));
-      W = w;
-    }
+    void SetBiasWeight(DendronWeightType w);
 
     bool operator==(const DendronType& d) const {
       return (In == d.In) && (Out == d.Out) &&
-             (std::fabs(W - d.W) < FPDelta);
+              DendronDist.CloseEnough(d.W, W);
     }
 
     bool operator!=(const DendronType& d) const {
@@ -113,7 +114,7 @@ namespace ANN {
 
     bool operator==(const NeuronType& n) const {
       return (n.Ins == Ins) && (n.Outs == Outs) &&
-             (std::fabs(n.W - W) < FPDelta);
+               NeuronDist.CloseEnough(n.W, W);
     }
 
     bool operator!=(const NeuronType& n) const {
@@ -189,7 +190,8 @@ namespace ANN {
       DendronWeightType Sum(0);
       while(d_it != Ins.end()) {
         DendronType* d = *d_it;
-        Sum += d->W*d->In->GetWeight();
+        // Sum(weight of dendron * input)
+        Sum += (d->W)*(d->In->GetWeight());
         ++d_it;
       }
       W = Sum;
@@ -410,7 +412,7 @@ namespace ANN {
           << "[ label = \"d" << d.Id << "(" << d.W<< ")\"];";
       }
 
-      // Breadth First traversal of network
+      // Depth First traversal of network
       template<typename Stream>
       void PrintConnections(NeuronType& root, Stream& s) {
         for (auto dp = root.Outs.begin(); dp != root.Outs.end();
@@ -498,9 +500,14 @@ namespace ANN {
       d->W = TA(d->W, input, desired_op);
     }
 
-    // Breadth First traversal of network
+    /** Breadth First traversal of network
+      * @todo: Separate the training of level-1 neurons
+      * in a separate loop. And then train all the subsequent
+      * neurons. That would improve performance in
+      * multi-layer networks with a lot of inner layers.
+      */
     template<typename InputSet, typename OutputType>
-    void TrainNetwork(InputSet Ins, OutputType op) {
+    void TrainNetwork(const InputSet& Ins, OutputType desired_op) {
       NeuronType& root = *NN.GetRoot();
       assert(root.Outs.size() == Ins.size());
       NeuronsRefType ToBeTrained;
@@ -509,12 +516,87 @@ namespace ANN {
         auto r = ToBeTrained.front();
         auto feed_ip = Ins.begin();
         for (auto dp = r->Outs.begin(); dp != r->Outs.end(); ++dp) {
+          // incrementing the feed_ip works because input-size
+          // is equal to the number of dendrons attached.
           DendronWeightType ip = r == &root ? *feed_ip++ : (*dp)->In->W;
-          TrainDendron(*dp, ++ip, op);
+          TrainDendron(*dp, ++ip, desired_op);
           ToBeTrained.push_back((*dp)->Out);
         }
         ToBeTrained.pop_front();
       }
+    }
+  };
+
+  // CRTP for evaluation functions.
+  template<typename Evaluator, typename InitType>
+  struct Evaluate {
+    typedef InitType init_type;
+    static const init_type init_value = Evaluator::init_value;
+    template<typename T>
+    T operator()(T t1, T t2) const {
+      const Evaluator& e = static_cast<const Evaluator&>(*this);
+      return e(t1, t2);
+    }
+  };
+
+  struct BoolAnd : public Evaluate<BoolAnd, bool> {
+    typedef bool init_type;
+    static const init_type init_value = true;
+    bool operator()(bool i1, bool i2) const {
+      return i1 && i2;
+    }
+  };
+
+  struct BoolOr : public Evaluate<BoolOr, bool> {
+    typedef bool init_type;
+    static const init_type init_value = false;
+    bool operator()(bool i1, bool i2) const {
+      return i1 || i2;
+    }
+  };
+
+  struct BoolXor : public Evaluate<BoolXor, bool> {
+    typedef bool init_type;
+    static const init_type init_value = false;
+    bool operator()(bool i1, bool i2) const {
+      return i1 ^ i2;
+    }
+  };
+
+  template<typename Evaluator, typename InitType=typename Evaluator::init_type>
+  struct Evaluate;
+
+  template<typename NeuralNetworkType, typename Inputs, typename Output>
+  class ValidateOutput {
+  private:
+    NeuralNetworkType& NN;
+  public:
+    enum BooleanFunction {
+      AND, // Init = true
+      OR,  // Init = false
+      XOR  // Init = false
+    };
+    ValidateOutput(NeuralNetworkType& nn)
+      :NN(nn)
+    { }
+
+    template<typename T>
+    Output GetDesiredOutput(Evaluate<T> eval, Inputs Ins) const {
+      //return std::accumulate(Ins.begin(), Ins.end(), Evaluate<T>::init_value,
+      //                       eval);
+      typename Evaluate<T>::init_type init = Evaluate<T>::init_value;
+      DEBUG0(dbgs() << "\tInit: " << init);
+      std::for_each(Ins.begin(), Ins.end(),
+                    [&init, &eval](typename Inputs::value_type val) {
+                      init = eval(init, val);
+                    });
+      DEBUG0(dbgs() << ", Desired output: " << init);
+      return init;
+    }
+
+    template<typename T>
+    bool Validate(Evaluate<T> eval, Inputs Ins, Output op) const {
+       return GetDesiredOutput(eval, Ins) == utilities::FloatToBool(op);
     }
   };
 } // namespace ANN

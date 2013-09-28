@@ -4,11 +4,11 @@
 using namespace ANN;
 
 int main() {
-  ANN::NeuralNetwork nn;
-  auto NN = CreateSLFFN(5);
+  const int ip_size = 5;
+  auto NN = CreateSLFFN<LinearAct<DendronWeightType>>(ip_size);
   NN.PrintNNDigraph(*NN.GetRoot(), std::cout);
 
-  auto TL = CreateTLFFN(5);
+  auto TL = CreateTLFFN<LinearAct<DendronWeightType>>(ip_size);
   TL.PrintNNDigraph(*TL.GetRoot(), std::cout);
   return 0;
 }

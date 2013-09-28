@@ -2,9 +2,12 @@
 #define UTILITIES_RNG_H
 #include<random>
 #include<cmath>
+#include<vector>
 
 namespace utilities {
   typedef float RNType;
+
+  std::vector<bool> BooleanSampleSpace{0, 1};
 
   class RNG {
     std::random_device rd;
@@ -34,7 +37,7 @@ namespace utilities {
 
   // Get a vector of randomly selected Size elements from sample space.
   template<typename T>
-  std::vector<T> GetRandomizedSet(const std::vector<T> SampleSpace,
+  std::vector<T> GetRandomizedSet(const std::vector<T>& SampleSpace,
                                   unsigned Size) {
     RNG rng(0, SampleSpace.size());
     std::vector<T> RandomizedSet;
