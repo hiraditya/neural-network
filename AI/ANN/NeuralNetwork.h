@@ -3,6 +3,8 @@
 
 #include<Debug.h>
 #include<RandomGenerator.h>
+#include<Activation.h>
+#include<TrainingAlgorithms.h>
 
 #include<vector>
 #include<list>
@@ -177,7 +179,10 @@ namespace ANN {
     }
 
     // To be used by the inner neurons only.
-    DendronWeightType EvalOp() {
+    // Note that the neurons only store the weight but it returns
+    // the activation to the caller.
+    template <typename ActivationFnType>
+    DendronWeightType EvalOp(const ActivationFnType& act) {
       assert(!IsRootNeuron(Id) &&
           "Cannot use this function for root neurons");
       auto d_it = Ins.begin();
@@ -188,7 +193,7 @@ namespace ANN {
         ++d_it;
       }
       W = Sum;
-      return Sum;
+      return act.Act(Sum);
     }
 
     virtual NeuronWeightType GetWeight() const {
@@ -218,12 +223,15 @@ namespace ANN {
    *  N is the root-neuron (kind of placeholder) and all the pseudo-edges
    *  coming out of N are Input Dendrons.
    *  This makes it easy to evaluate the network uniformly.
+   *  The neurons are the Adders of the weight*input of input dendrons.
    */
+  template<typename ActivationFnType>
   class NeuralNetwork {
     NeuronsType Neurons;
     DendronsType Dendrons;
     // Root is always the first entry in Neurons.
     NeuronType* RootNeuron;
+    ActivationFnType ActivationFn;
     public:
       // Empty
       NeuralNetwork()
@@ -379,20 +387,13 @@ namespace ANN {
           InNeuronRefs2.clear();
           std::for_each(InNeuronRefs1.begin(), InNeuronRefs1.end(),
               [&](NeuronType* N) {
-                N->EvalOp();
+                N->EvalOp(ActivationFn);
                 std::for_each(N->Outs.begin(), N->Outs.end(),
                      [&](DendronType* din){ InNeuronRefs2.insert(din->Out); });
             });
         };
         assert(InNeuronRefs2.size() == 1);
-        return (*InNeuronRefs2.begin())->EvalOp();
-      }
-
-      template<typename Stream>
-      void PrintNetwork(Stream& s, std::string Title) {
-        s << "digraph " << Title << "{\n";
-        PrintNeurons(s);
-        s << "};";
+        return (*InNeuronRefs2.begin())->EvalOp(ActivationFn);
       }
 
       template<typename Stream>
@@ -434,10 +435,11 @@ namespace ANN {
   // N----IN ---- Out
   // `----IN ----
   // @param NumNeurons = Number of input layer neurons.
-  NeuralNetwork CreateSLFFN(unsigned NumNeurons) {
+  template<typename ActivationFnType>
+  NeuralNetwork<ActivationFnType> CreateSLFFN(unsigned NumNeurons) {
     using namespace utilities;
     RNG rnd(0, 1);
-    NeuralNetwork nn;
+    NeuralNetwork<ActivationFnType> nn;
     auto root = nn.CreateRoot();
     auto out = nn.CreateNeuron(0);
     for (unsigned i = 0; i < NumNeurons; ++i) {
@@ -453,10 +455,11 @@ namespace ANN {
   // N-----IN ---- IN-- Out
   // `---- IN ---- IN//
   // `---- IN ---- IN/
-  NeuralNetwork CreateTLFFN(unsigned NumNeurons) {
+  template<typename ActivationFnType>
+  NeuralNetwork<ActivationFnType> CreateTLFFN(unsigned NumNeurons) {
     using namespace utilities;
     RNG rnd(0, 1);
-    NeuralNetwork nn;
+    NeuralNetwork<ActivationFnType> nn;
     auto root = nn.CreateRoot();
     auto out = nn.CreateNeuron(0);
     for (unsigned i = 0; i < NumNeurons; ++i) {
@@ -468,6 +471,52 @@ namespace ANN {
     }
     return nn;
   }
+
+  // Trains the neural network when the training algorithm
+  // is provided. Each dendron is trained by the breadth first
+  // traversal of the network starting from root node.
+  // Assumptions: The dendrons have the weight and neurons
+  // are the summers.
+  template<typename NeuralNetworkType, typename TAType>
+  class Trainer {
+    NeuralNetworkType& NN;
+    TAType TA;
+    public:
+    Trainer(NeuralNetworkType& nn)
+      : NN(nn)
+    { }
+    const TAType& GetTrainingAlgorithm() {
+      return TA;
+    }
+    const NeuralNetworkType& GetNeuralNetwork() const {
+      return NN;
+    }
+
+    // @todo: Put innovation number as well.
+    void TrainDendron(DendronType* d, DendronWeightType input,
+        DendronWeightType desired_op) {
+      d->W = TA(d->W, input, desired_op);
+    }
+
+    // Breadth First traversal of network
+    template<typename InputSet, typename OutputType>
+    void TrainNetwork(InputSet Ins, OutputType op) {
+      NeuronType& root = *NN.GetRoot();
+      assert(root.Outs.size() == Ins.size());
+      NeuronsRefType ToBeTrained;
+      ToBeTrained.push_back(&root);
+      while (!ToBeTrained.empty()) {
+        auto r = ToBeTrained.front();
+        auto feed_ip = Ins.begin();
+        for (auto dp = r->Outs.begin(); dp != r->Outs.end(); ++dp) {
+          DendronWeightType ip = r == &root ? *feed_ip++ : (*dp)->In->W;
+          TrainDendron(*dp, ++ip, op);
+          ToBeTrained.push_back((*dp)->Out);
+        }
+        ToBeTrained.pop_front();
+      }
+    }
+  };
 } // namespace ANN
 
 #endif // ANN_NEURAL_NETWORK_H
