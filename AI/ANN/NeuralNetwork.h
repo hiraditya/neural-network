@@ -65,12 +65,14 @@ namespace ANN {
     NeuronType* In;
     NeuronType* Out;
     DendronWeightType W;
+    // delta of previous weight update.
+    DendronWeightType dW;
 
     // in -----dendron--------> out
     // output of 'in' neuron feeds to the input of 'out' neuron
     DendronType(IdType i, NeuronType* in, NeuronType* out,
                 DendronWeightType w)
-      : Id(i), In(in), Out(out), W(w){
+      : Id(i), In(in), Out(out), W(w), dW(DendronWeightType(0)) {
         assert(In && Out);
     }
 
@@ -93,28 +95,35 @@ namespace ANN {
     }
   };
 
-  typedef std::vector<DendronType*> DendronsRefType;
+  typedef std::list<DendronType*> DendronsRefListType;
+  typedef std::set<DendronType*> DendronsRefSetType;
+  typedef std::vector<DendronType*> DendronsRefVecType;
   // Represents one neuron. Each neuron may have multiple
   // incoming/outgoing connections.
   //template<typename NeuronWeightType>
   struct NeuronType {
+    typedef DendronType DendronType_t;
     IdType Id;
-    DendronsRefType Ins;
-    DendronsRefType Outs;
-    NeuronWeightType W;
+    IdType LayerNum;
+    NeuronWeightType W; // This is also called as the signal
+    NeuronWeightType dW; // error = Output - desired_op
+    NeuronWeightType Output; // Output = non-linearity(W)
+    DendronsRefVecType Ins;
+    DendronsRefVecType Outs;
 
-    NeuronType(IdType i, NeuronWeightType w)
-      : Id(i), W(w)
+    NeuronType(IdType i, unsigned ln, NeuronWeightType w)
+      : Id(i), LayerNum(ln), W(w), dW(NeuronWeightType(0))
     { }
-    NeuronType(IdType i, DendronType* in, DendronType* out, NeuronWeightType w)
-      : Id(i), W(w) {
+    NeuronType(IdType i, unsigned ln, DendronType* in,
+               DendronType* out, NeuronWeightType w)
+      : Id(i), LayerNum(ln), W(w), dW(NeuronWeightType(0)) {
       Ins.push_back(in);
       Outs.push_back(out);
     }
 
     bool operator==(const NeuronType& n) const {
-      return (n.Ins == Ins) && (n.Outs == Outs) &&
-               NeuronDist.CloseEnough(n.W, W);
+      return (n.LayerNum == LayerNum) && (n.Ins == Ins)
+              && (n.Outs == Outs) && NeuronDist.CloseEnough(n.W, W);
     }
 
     bool operator!=(const NeuronType& n) const {
@@ -157,10 +166,10 @@ namespace ANN {
     void Disconnect(DendronType* d, Direction dir) {
       assert(dir != Direction::InvalidDirection);
       // Assume that incoming dendron is to be removed.
-      DendronsRefType* ToBe = &Ins;
+      DendronsRefVecType* ToBe = &Ins;
       if (dir == Direction::Outwards)
         ToBe = &Outs;
-      DendronsRefType::iterator it = std::find(ToBe->begin(), ToBe->end(), d);
+      DendronsRefVecType::iterator it = std::find(ToBe->begin(), ToBe->end(), d);
       assert(it != ToBe->end());
       ToBe->erase(it);
     }
@@ -169,8 +178,32 @@ namespace ANN {
       Disconnect(d, Direction::Outwards);
     }
 
+    // This Neuron ---- n
+    bool IsConnectedForward(NeuronType* n) {
+      for (auto it = Outs.begin(); it != Outs.end(); ++it)
+        if ((*it)->Out == n)
+          return true;
+      return false;
+    }
+
+    // This Neuron ---- n
+    bool IsConnectedBackward(NeuronType* n) {
+      for (auto it = Ins.begin(); it != Ins.end(); ++it)
+        if ((*it)->In == n)
+          return true;
+      return false;
+    }
+
+    Direction IsConnected(NeuronType* n) {
+      if (IsConnectedForward(n))
+        return Direction::Outwards;
+      if (IsConnectedBackward(n))
+        return Direction::Inwards;
+      return Direction::InvalidDirection;
+    }
+
     Direction IsConnected(DendronType* d) {
-      DendronsRefType::iterator it = std::find(Ins.begin(), Ins.end(), d);
+      DendronsRefVecType::iterator it = std::find(Ins.begin(), Ins.end(), d);
       if (it != Ins.end())
         return Direction::Inwards;
       it = std::find(Outs.begin(), Outs.end(), d);
@@ -195,7 +228,8 @@ namespace ANN {
         ++d_it;
       }
       W = Sum;
-      return act.Act(Sum);
+      Output = act.Act(Sum);
+      return Output;
     }
 
     virtual NeuronWeightType GetWeight() const {
@@ -215,42 +249,51 @@ namespace ANN {
 
 
   typedef std::list<NeuronType> NeuronsType;
-  typedef std::list<NeuronType*> NeuronsRefType;
-  typedef std::set<NeuronType*> NeuronsRefSetType; 
   typedef std::list<DendronType> DendronsType;
+  typedef std::list<NeuronType*> NeuronsRefListType;
+  typedef std::vector<NeuronType*> NeuronsRefVecType;
+  typedef std::set<NeuronType*> NeuronsRefSetType; 
   /**
-   *   ,--In--Cen---  -----
-   *  N --In--Cen---  ----- Out
-   *   `--In--Cen---  -----
-   *  N is the root-neuron (kind of placeholder) and all the pseudo-edges
-   *  coming out of N are Input Dendrons.
-   *  This makes it easy to evaluate the network uniformly.
-   *  The neurons are the Adders of the weight*input of input dendrons.
+   *  ,--In--Cen---  -----
+   * N --In--Cen---  ----- Out
+   *  `--In--Cen---  -----
+   * N is the root-neuron (kind of placeholder) and all the pseudo-edges
+   * coming out of N are Input Dendrons.
+   * This makes it easy to evaluate the network uniformly.
+   * The neurons are the Adders of the weight*input of input dendrons.
+   * @note As of now, the bias neuron is the first input neuron.
+   * @note level 1 neurons are meant only for forwarding the input.
    */
   template<typename ActivationFnType>
   class NeuralNetwork {
     NeuronsType Neurons;
     DendronsType Dendrons;
+    /// @todo this when using ids to index neurons.
+    typedef std::vector<std::vector<NeuronType*> > NeuronsByLayerType;
+    NeuronsByLayerType NeuronsByLayer;
     // Root is always the first entry in Neurons.
     NeuronType* RootNeuron;
+    unsigned NumLayers;
     ActivationFnType ActivationFn;
     public:
       // Empty
       NeuralNetwork()
-        : RootNeuron(NULL)
+        : RootNeuron(NULL), NumLayers(0)
       { }
 
       // Initializes the network with just one neuron.
       NeuralNetwork(NeuronType& n) {
         Neurons.push_back(n);
         RootNeuron = &*Neurons.begin();
+        NumLayers = 0;
       }
 
       // Root (the placeholder) has unit weight
       // so that evaluating subsequent stages becomes regular.
       NeuronsType::iterator CreateRoot() {
         assert(RootNeuron == NULL);
-        CreateNeuron(1);
+        // Root is in the zeroth layer and has a weight 1.
+        CreateNeuron(0, 1);
         RootNeuron = &*Neurons.begin();
         return Neurons.begin();
       }
@@ -266,11 +309,18 @@ namespace ANN {
         return Neurons.begin();
       }
 
+      const ActivationFnType& GetActivationFunction() const {
+        return ActivationFn;
+      }
+
       // Use the iterator, don't reuse it.
       // It might have been invalidated.
-      NeuronsType::iterator CreateNeuron(NeuronWeightType w 
+      /// @param ln = Layer number where this neuron will go.
+      NeuronsType::iterator CreateNeuron(unsigned ln, NeuronWeightType w
                                          = NeuronWeightType(0)) {
-        NeuronType n(GetNewId(), w);
+        NeuronType n(GetNewId(), ln, w);
+        if (NumLayers < ln)
+          NumLayers = ln;
         return AddNeuron(n);
       }
 
@@ -330,6 +380,10 @@ namespace ANN {
         assert(i1 != Neurons.end());
         assert(i2 != Neurons.end());
         assert(i1 != i2);
+        assert(!i1->IsConnected(&*i2));
+        // Any connection from root has to be a unit weight.
+        if (&*i1 == RootNeuron)
+          assert(w == DendronWeightType(1));
         auto dp = CreateDendron(i1, i2, w);
         // d is the output of i1
         i1->Connect(&*dp, Direction::Outwards);
@@ -398,6 +452,29 @@ namespace ANN {
         return (*InNeuronRefs2.begin())->EvalOp(ActivationFn);
       }
 
+      unsigned GetTotalLayers() const {
+        return NumLayers;
+      }
+
+      const NeuronsByLayerType& GetNeuronsByLayer() const {
+        return NeuronsByLayer;
+      }
+
+      void ClearNeuronsByLayer() {
+        NeuronsByLayer.clear();
+      }
+
+      NeuronsByLayerType GenNeuronsByLayer() {
+        assert(NeuronsByLayer.empty());
+        NeuronsByLayer.resize(GetTotalLayers()+1);
+        for (auto it = Neurons.begin(); it != Neurons.end(); ++it) {
+          NeuronType& n = *it;
+          NeuronsByLayer[n.LayerNum].push_back(&n);
+          DEBUG0(dbgs() << "\nNeuron#" << n.Id << ", Layer" << n.LayerNum);
+        }
+        return NeuronsByLayer;
+      }
+
       template<typename Stream>
       void PrintNeurons(Stream& s) {
         for(auto ni = Neurons.begin(); ni != Neurons.end(); ++ni)
@@ -412,22 +489,31 @@ namespace ANN {
           << "[ label = \"d" << d.Id << "(" << d.W<< ")\"];";
       }
 
-      // Depth First traversal of network
+      /** Depth First traversal of network
+        * @todo Insted of using a std::set use a vector/bit-vector
+        * initialized to same number of elements as there are dendrons.
+        * That will make find very fast and hence the printing.
+        */
       template<typename Stream>
-      void PrintConnections(NeuronType& root, Stream& s) {
+      void PrintConnectionsDFS(NeuronType& root, DendronsRefSetType& Printed,
+                            Stream& s) {
         for (auto dp = root.Outs.begin(); dp != root.Outs.end();
-            ++dp) {
-          PrintDendron(s, **dp);
+             ++dp) {
+          if (Printed.find(*dp) == Printed.end())
+            PrintDendron(s, **dp);
+          Printed.insert(*dp);
           // This should work now because self-feedback is not supported.
-          PrintConnections(*(*dp)->Out, s);
+          PrintConnectionsDFS(*(*dp)->Out, Printed, s);
         }
       }
+      // Use a BFS method to print the neural network.
       template<typename Stream>
       void PrintNNDigraph(NeuronType& root, Stream& s,
                            const std::string& Name= "") {
+        DendronsRefSetType Printed;
         s << "digraph " << Name <<  " {\n";
         PrintNeurons(s);
-        PrintConnections(root, s);
+        PrintConnectionsDFS(root, Printed, s);
         s << "\n}\n";
       }
   };
@@ -440,13 +526,13 @@ namespace ANN {
   template<typename ActivationFnType>
   NeuralNetwork<ActivationFnType> CreateSLFFN(unsigned NumNeurons) {
     using namespace utilities;
-    RNG rnd(0, 1);
+    RNG rnd(-1, 1);
     NeuralNetwork<ActivationFnType> nn;
     auto root = nn.CreateRoot();
-    auto out = nn.CreateNeuron(0);
+    auto out = nn.CreateNeuron(2, 0);
     for (unsigned i = 0; i < NumNeurons; ++i) {
-      auto in = nn.CreateNeuron(0);
-      nn.Connect(root, in, rnd.Get());
+      auto in = nn.CreateNeuron(1, 0);
+      nn.Connect(root, in, 1.0);
       nn.Connect(in, out, rnd.Get());
     }
     return nn;
@@ -460,16 +546,31 @@ namespace ANN {
   template<typename ActivationFnType>
   NeuralNetwork<ActivationFnType> CreateTLFFN(unsigned NumNeurons) {
     using namespace utilities;
-    RNG rnd(0, 1);
+    RNG rnd(-1, 1);
     NeuralNetwork<ActivationFnType> nn;
+    std::vector<NeuronsType::iterator> L2Neurons;
     auto root = nn.CreateRoot();
-    auto out = nn.CreateNeuron(0);
-    for (unsigned i = 0; i < NumNeurons; ++i) {
-      auto in1 = nn.CreateNeuron(0);
-      auto in2 = nn.CreateNeuron(0);
-      nn.Connect(root, in1, rnd.Get());
-      nn.Connect(in1, in2, rnd.Get());
-      nn.Connect(in2, out, rnd.Get());
+    auto out = nn.CreateNeuron(3, 0);
+    auto bias = nn.CreateNeuron(1, 0);
+    // Any connection from root has to be a unit weight.
+    nn.Connect(root, bias, 1.0);
+    nn.Connect(bias, out, rnd.Get());
+    // Connect bias neurons to each l2 neurons,
+    // and each l2 neurons to out.
+    for (unsigned i = 0; i < NumNeurons -1; ++i) {
+      auto l2 = nn.CreateNeuron(2, 0);
+      nn.Connect(bias, l2, rnd.Get());
+      nn.Connect(l2, out, rnd.Get());
+      L2Neurons.push_back(l2);
+    }
+    // For each layer1 neuron make connection with it
+    // to all the layer 2 neurons.
+    for (unsigned i = 0; i < NumNeurons -1; ++i) {
+      auto l1 = nn.CreateNeuron(1, 0);
+      nn.Connect(root, l1, 1.0);
+      for (unsigned j = 0; j < NumNeurons -1; ++j) {
+        nn.Connect(l1, L2Neurons[j], rnd.Get());
+      }
     }
     return nn;
   }
@@ -494,10 +595,19 @@ namespace ANN {
       return NN;
     }
 
-    // @todo: Put innovation number as well.
-    void TrainDendron(DendronType* d, DendronWeightType input,
-        DendronWeightType desired_op) {
-      d->W = TA(d->W, input, desired_op);
+    /// @todo: Put innovation number as well.
+    // Training neuron means calculating the delta.
+    void TrainOutputNeuron(NeuronType* n, NeuronWeightType desired_op) {
+      TA.OutputNode(*n, desired_op, NN.GetActivationFunction());
+    }
+    void TrainHiddenNeuron(NeuronType* n) {
+      TA.HiddenNode(*n, NN.GetActivationFunction());
+    }
+    void TrainDendron(DendronType *dp) {
+      // weight update = alpha*input*delta
+      //dp->W += dp->dW; // for momentum.
+      dp->dW = -alpha*(dp->In->Output)*(dp->Out->dW);
+      dp->W += dp->dW;
     }
 
     /** Breadth First traversal of network
@@ -510,19 +620,47 @@ namespace ANN {
     void TrainNetwork(const InputSet& Ins, OutputType desired_op) {
       NeuronType& root = *NN.GetRoot();
       assert(root.Outs.size() == Ins.size());
-      NeuronsRefType ToBeTrained;
-      ToBeTrained.push_back(&root);
+      NeuronsRefListType ToBeTrained;
+      // level 1 neurons are meant only for forwarding the input.
+      for (auto dp = root.Outs.begin(); dp != root.Outs.end(); ++dp) {
+        ToBeTrained.push_back((*dp)->Out);
+      }
+      //ToBeTrained.push_back(&root);
       while (!ToBeTrained.empty()) {
-        auto r = ToBeTrained.front();
-        auto feed_ip = Ins.begin();
+        auto r = ToBeTrained.front();        
         for (auto dp = r->Outs.begin(); dp != r->Outs.end(); ++dp) {
           // incrementing the feed_ip works because input-size
           // is equal to the number of dendrons attached.
-          DendronWeightType ip = r == &root ? *feed_ip++ : (*dp)->In->W;
-          TrainDendron(*dp, ++ip, desired_op);
+          //TrainOutputDendron(*dp, desired_op);
           ToBeTrained.push_back((*dp)->Out);
         }
         ToBeTrained.pop_front();
+      }
+    }
+    // Only works for scalar outputs i.e. only one output neuron.
+    template<typename InputSet, typename OutputType>
+    void TrainNetworkBackProp(const InputSet& Ins, OutputType desired_op,
+                              NeuronType& out) {
+      NeuronType& root = *NN.GetRoot();
+      assert(root.Outs.size() == Ins.size());
+      assert(out.Outs.empty());
+      NeuronsRefListType ToBeTrained;
+      NeuronsRefSetType ToBeTrainedSet;
+      TrainOutputNeuron(out, desired_op);
+      for (auto dp = out.Ins.begin(); dp != out.Ins.end(); ++dp) {
+        ToBeTrained.push_back((*dp)->In);
+        TrainDendron(*dp);
+      }
+      // train all the neurons and dendrons until the input layer.
+      // assuming the network is fully connected.
+      for (auto np = ToBeTrained.begin(); np != ToBeTrained.end(); ++np) {
+        TrainHiddenNeuron(*np);
+        for (auto di = (*np)->Ins.begin(); di != (*np)->Ins.end(); ++di) {
+          DendronType* dp = *di;
+          DEBUG0(dbgs() << "\nTraining dendron:" << dp->Id);
+          TrainDendron(dp);
+          ToBeTrainedSet.insert(dp->In);
+        }
       }
     }
   };
@@ -585,12 +723,12 @@ namespace ANN {
       //return std::accumulate(Ins.begin(), Ins.end(), Evaluate<T>::init_value,
       //                       eval);
       typename Evaluate<T>::init_type init = Evaluate<T>::init_value;
-      DEBUG0(dbgs() << "\tInit: " << init);
+      DEBUG2(dbgs() << "\tInit: " << init);
       std::for_each(Ins.begin(), Ins.end(),
                     [&init, &eval](typename Inputs::value_type val) {
                       init = eval(init, val);
                     });
-      DEBUG0(dbgs() << ", Desired output: " << init);
+      DEBUG2(dbgs() << ", Desired output: " << init);
       return init;
     }
 

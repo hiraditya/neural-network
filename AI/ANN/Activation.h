@@ -18,6 +18,12 @@ namespace ANN {
         const T& ref = static_cast<const T&>(*this);
         return ref.Act(t);
       }
+      // Derivative of linear activation function w.r.t. weight.
+      template<typename WeightType>
+      WeightType Deriv(WeightType t) const {
+        const T& ref = static_cast<const T&>(*this);
+        return ref.Deriv(t);
+      }
   };
 
   template<typename WeightType>
@@ -25,6 +31,10 @@ namespace ANN {
     public:
       WeightType Act(WeightType w) const {
         return w;
+      }
+      // Derivative of linear activation function w.r.t. weight is 1
+      WeightType Deriv(WeightType t) const {
+        return WeightType(1);
       }
   };
 
@@ -35,6 +45,10 @@ namespace ANN {
         DEBUG2(dbgs() << "\nSigmoid function Input: " << w
                       << ", Output:" << std::tanh(w));
         return std::tanh(w);
+      }
+      // Derivative of tanh activation function w.r.t. weight is 1 - tanh(w)^2
+      WeightType Deriv(WeightType t) const {
+        return 1 - std::tanh(t)*std::tanh(t);
       }
   };
 } // namespace ANN
