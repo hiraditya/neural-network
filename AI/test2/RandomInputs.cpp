@@ -10,52 +10,68 @@ using namespace utilities;
 int main() {
   const int ip_size = 3;
   // Create a single layer feed forward neural network.
-  auto NN = CreateSLFFN<LinearAct<DendronWeightType>>(ip_size);
+  auto NN = CreateSLFFN<SigmoidAct<DendronWeightType>>(ip_size);
 
   // Choose the training algorithm.
-  Trainer<decltype(NN), GradientDescent>T(NN);
+  float alpha = 0.01;
+  Trainer<decltype(NN), FeedForward>T(NN, alpha);
 
   // Validation of the output.
   typedef ValidateOutput<decltype(NN), std::vector<bool>, bool>
           ValidatorType;
   ValidatorType Validator(NN);
-  typedef BoolOr CostFunction;
-
-  for (unsigned i = 0; i < 20;) {
+  typedef BoolAnd CostFunction;
+  unsigned times_trained = 0;
+  train:
+  T.SetAlpha(alpha);
+  DEBUG0(dbgs() << "\nTraining with alpha:" << alpha);
+  for (unsigned i = 0; i < 10;) {
     std::vector<bool> RS = GetRandomizedSet(BooleanSampleSpace, ip_size-1);
     std::vector<float> RSF = BoolsToFloats(RS);
     // The last input is the bias.
-    RSF.push_back(-1);
+    RSF.insert(RSF.begin(), -1);
     DEBUG0(dbgs() << "\nSample Inputs:"; PrintElements(dbgs(), RSF));
     //NN.PrintNNDigraph(*NN.GetRoot(), std::cout);
     auto op = NN.GetOutput(RSF);
+    auto bool_op = FloatToBool(op);
+    auto desired_op = Validator.GetDesiredOutput(CostFunction(), RS);
     // Is the output same as desired output?
-    if (!Validator.Validate(CostFunction(), RS, FloatToBool(op))) {
-      DEBUG0(dbgs() << "\tLearning (" << op << ", " << FloatToBool(op) << ")");
+    if (!Validator.Validate(CostFunction(), RS, bool_op)) {
+      DEBUG0(dbgs() << "\tLearning (" << op
+                    << ", " << bool_op
+                    << ", " << desired_op << ")");
+      //NN.PrintNNDigraph(*NN.GetRoot(), std::cout);
       // No => Train
-      T.TrainNetwork(RSF, op);
+      T.TrainNetwork(RSF, desired_op);
+      ++times_trained;
       i = 0;
+      //NN.PrintNNDigraph(*NN.GetRoot(), std::cout);
     } else {
       ++i; // Increment trained counter.
-      DEBUG0(dbgs() << "\tTrained (" << op << ", " << FloatToBool(op) << ")");
+      DEBUG0(dbgs() << "\tTrained (" << op << ", " << bool_op << ")");
     }
   }
   // Once the training has been done, test the network with
   // a large set of inputs in the sample space, possibly
   // covering the complete sample space.
   DEBUG0(dbgs() << "\nPrinting after training");
-  for (unsigned i = 0; i < 10; ++i) {
+  for (unsigned i = 0; i < 20; ++i) {
     std::vector<bool> RS = GetRandomizedSet(BooleanSampleSpace, ip_size-1);
     std::vector<float> RSF = BoolsToFloats(RS);
     // The last input is the bias.
-    RSF.push_back(-1);
+    RSF.insert(RSF.begin(), -1);
     auto op = NN.GetOutput(RSF);
+    auto bool_op = FloatToBool(op);
     DEBUG0(dbgs() << "\nSample Inputs:"; PrintElements(dbgs(), RSF));
-    if (Validator.Validate(CostFunction(), RS, FloatToBool(op)))
-      DEBUG0(dbgs() << "\tTrained: " << op);
-    else
-      DEBUG0(dbgs() << "\tUnTrained: " << op);
+    if (Validator.Validate(CostFunction(), RS, bool_op))
+      DEBUG0(dbgs() << "\tTrained: " << op << ", " << bool_op << ")");
+    else {
+      alpha = alpha < 0.4 ? 2*alpha : alpha;
+      DEBUG0(dbgs() << "\tUnTrained: " << op << ", " << bool_op << ")");
+      goto train;
+    }
   }
+  DEBUG0(dbgs() << "\nTrained for " << times_trained << " cycles.");
   NN.PrintNNDigraph(*NN.GetRoot(), std::cout);
   return 0;
 }

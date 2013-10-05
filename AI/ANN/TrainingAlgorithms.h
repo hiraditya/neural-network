@@ -3,11 +3,10 @@
 
 #include "RandomGenerator.h"
 #include "Activation.h"
+#include <cassert>
 
 namespace ANN {
-  // Keeping alpha low prevents oscillation.
-  const float alpha = 0.01;
-  utilities::RNG noise(-alpha/5.0, alpha/5.0);
+  // Training algorithms only calculate the deltas.
   template<typename AlgorithmType>
   struct TrainingAlgorithm {
     template<typename DendronType, typename NeuronWeightType,
@@ -33,20 +32,40 @@ namespace ANN {
                     const ActivationFnType& act) const {
       auto error = (n.Output - desired_op);
       // mean square error
-      n.dW = 2*error*act.Deriv(n.Output);
+      /// @todo Optimize when activation is tanh, in that case
+      /// n.dW = 2*error*(1-n.Output*n.Output);
+      n.dW = 2*error*act.Deriv(n.W);
     }
     template<typename NeuronType, typename NeuronWeightType,
              typename ActivationFnType>
-    void HiddenNode(NeuronType& n,
+    void HiddenNode(NeuronType& n,  NeuronWeightType desired_op,
                     const ActivationFnType& act) const {
-      n.dW(NeuronWeightType(0));
-      std::for_each(n.Outs.begin(), n.Outs.end(),
-                    [&n](typename NeuronType::DendronType_t* d) {
-                      n.dW += d->W*d->Out->dW;
-                    });
-    /// @todo Optimize when activation is tanh, in that case
-    /// n.dW = n.dW*(1-n.Output*n.Output);
-    n.dW = n.dW*act.Deriv(n.W);
+      // n.dW = deriv(output)*Sum(delta(output-neuron))
+      n.dW = NeuronWeightType(0);
+      for (auto it = n.Outs.begin(); it != n.Outs.end(); ++it) {
+        n.dW += ((*it)->W)*((*it)->Out->dW);
+      }
+      /// @todo Optimize when activation is tanh, in that case
+      /// n.dW = n.dW*(1-n.Output*n.Output);
+      n.dW = (n.dW)*(act.Deriv(n.W));
+    }
+  };
+  struct FeedForward : public TrainingAlgorithm<FeedForward> {
+    template<typename NeuronType, typename NeuronWeightType,
+             typename ActivationFnType>
+    void OutputNode(NeuronType& n, NeuronWeightType desired_op,
+                    const ActivationFnType& act) const {
+      auto error = (n.Output - desired_op);
+      // mean square error
+      /// @todo Optimize when activation is tanh, in that case
+      /// n.dW = 2*error*(1-n.Output*n.Output);
+      n.dW = 2*error*act.Deriv(n.W);
+    }
+    template<typename NeuronType, typename NeuronWeightType,
+             typename ActivationFnType>
+    void HiddenNode(NeuronType& n,  NeuronWeightType desired_op,
+                    const ActivationFnType& act) const {
+      assert(0 && "No hidden node training for feed forward network");
     }
   };
 } // namespace ANN

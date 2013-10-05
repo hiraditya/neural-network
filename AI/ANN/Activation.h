@@ -48,7 +48,8 @@ namespace ANN {
       }
       // Derivative of tanh activation function w.r.t. weight is 1 - tanh(w)^2
       WeightType Deriv(WeightType t) const {
-        return 1 - std::tanh(t)*std::tanh(t);
+        auto tmp = std::tanh(t);
+        return 1 - tmp*tmp;
       }
   };
 } // namespace ANN

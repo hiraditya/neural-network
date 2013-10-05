@@ -42,7 +42,12 @@ namespace ANN {
   inline bool IsRootNeuron(IdType Id) {
     return Id == 0;
   }
-
+  inline bool IsOutNeuron(IdType Id) {
+    return Id == 1;
+  }
+  inline bool IsBiasNeuron(IdType Id) {
+    return Id == 2;
+  }
   // @todo Reimplement this.
   IdType GetNewId() {
     static IdType ID = 0;
@@ -108,15 +113,18 @@ namespace ANN {
     NeuronWeightType W; // This is also called as the signal
     NeuronWeightType dW; // error = Output - desired_op
     NeuronWeightType Output; // Output = non-linearity(W)
+    bool EvalSigCalled;
     DendronsRefVecType Ins;
     DendronsRefVecType Outs;
 
     NeuronType(IdType i, unsigned ln, NeuronWeightType w)
-      : Id(i), LayerNum(ln), W(w), dW(NeuronWeightType(0))
+      : Id(i), LayerNum(ln), W(w),
+        dW(NeuronWeightType(0)), EvalSigCalled(false)
     { }
     NeuronType(IdType i, unsigned ln, DendronType* in,
                DendronType* out, NeuronWeightType w)
-      : Id(i), LayerNum(ln), W(w), dW(NeuronWeightType(0)) {
+      : Id(i), LayerNum(ln), W(w),
+        dW(NeuronWeightType(0)), EvalSigCalled(false) {
       Ins.push_back(in);
       Outs.push_back(out);
     }
@@ -157,8 +165,12 @@ namespace ANN {
       Connect(out, Direction::Outwards);
     }
 
+    // For neurons weights are calculated 'not' assigned.
+    // When it is assigned that means the weight will not be calculated
+    // and evalOp will be invoked directly.
     void SetWeight(NeuronWeightType w) {
       assert(Valid(w));
+      EvalSigCalled = true;
       W = w;
     }
 
@@ -212,28 +224,34 @@ namespace ANN {
       return Direction::InvalidDirection;
     }
 
-    // To be used by the inner neurons only.
-    // Note that the neurons only store the weight but it returns
-    // the activation to the caller.
+    DendronWeightType EvalSig() {
+      assert(!IsRootNeuron(Id) &&
+          "Cannot use this function for root neurons");
+      auto d_it = Ins.begin();
+      NeuronWeightType Sum(0);
+      while(d_it != Ins.end()) {
+        DendronType* d = *d_it;
+        // Sum(weight of dendron * input)
+        Sum += (d->W)*(d->In->Output);
+        ++d_it;
+      }
+      W = Sum;
+      EvalSigCalled = true;
+      return Sum;
+    }
+
+    // To be used by the inner neurons only
+    // and only after EvalSig has been called on this neuron.
     template <typename ActivationFnType>
     DendronWeightType EvalOp(const ActivationFnType& act) {
       assert(!IsRootNeuron(Id) &&
           "Cannot use this function for root neurons");
-      auto d_it = Ins.begin();
-      DendronWeightType Sum(0);
-      while(d_it != Ins.end()) {
-        DendronType* d = *d_it;
-        // Sum(weight of dendron * input)
-        Sum += (d->W)*(d->In->GetWeight());
-        ++d_it;
-      }
-      W = Sum;
-      Output = act.Act(Sum);
+      assert(EvalSigCalled && "First calculate the signal/ip on this neuron");
+      Output = act.Act(W);
+      DEBUG1(dbgs() << "\nEval n"<< Id
+                    << "(W:" << W << ", Output:" << Output << ")");
+      EvalSigCalled = false;
       return Output;
-    }
-
-    virtual NeuronWeightType GetWeight() const {
-      return W;
     }
 
     std::ostream& operator<<(std::ostream& os) {
@@ -273,6 +291,7 @@ namespace ANN {
     NeuronsByLayerType NeuronsByLayer;
     // Root is always the first entry in Neurons.
     NeuronType* RootNeuron;
+    NeuronType* OutNeuron;
     unsigned NumLayers;
     ActivationFnType ActivationFn;
     public:
@@ -303,13 +322,22 @@ namespace ANN {
         Dendrons.resize(numDendrons);
       }*/
 
+      void SetOutputNeuron(NeuronType& n) {
+        OutNeuron = &n;
+      }
+
+      NeuronType& GetOutputNeuron() {
+        assert(OutNeuron && "OutNeuron hasn't been initilized yet");
+        return *OutNeuron;
+      }
+
       // Root is always the first entry.
       NeuronsType::iterator GetRoot() {
         assert(RootNeuron);
         return Neurons.begin();
       }
 
-      const ActivationFnType& GetActivationFunction() const {
+      ActivationFnType& GetActivationFunction() {
         return ActivationFn;
       }
 
@@ -416,40 +444,54 @@ namespace ANN {
       NeuronWeightType GetOutput(const std::vector<DendronWeightType>& Ins) {
         assert(RootNeuron->Outs.size() == Ins.size());
         auto ip = Ins.begin();
-        NeuronsRefSetType NeuronRefs;
+        NeuronsRefVecType NeuronRefs;
         // Root. First propagate the input multiplied by
         // input dendron weights to the layer 1 neurons.
         NeuronType* Current = RootNeuron;
-        std::for_each(Current->Outs.begin(), Current->Outs.end(),
-            [&NeuronRefs, &ip, this](DendronType* d) {
-              d->Out->SetWeight((*ip)*d->W);
-              DEBUG1(dbgs() << "\nWt: " << d->W << ", ip:" << *ip;
-                d->Out->Print(dbgs()););
-              std::for_each(d->Out->Outs.begin(), d->Out->Outs.end(),
-                   [&](DendronType* din){ NeuronRefs.insert(din->Out); });
-              ++ip;
-            });
-        NeuronsRefSetType InNeuronRefs1, InNeuronRefs2 = NeuronRefs;
-        while(InNeuronRefs2.size() > 1) {
+        NeuronsRefSetType InNeuronRefs1;
+        auto it = Current->Outs.begin();
+        for (; it != Current->Outs.end(); ++it) {
+          DendronType* d = *it;
+          d->Out->SetWeight((*ip)*d->W);
+          DEBUG1(dbgs() << "\nWt: " << d->W << ", ip:" << *ip;
+                 d->Out->Print(dbgs()););
+          d->Out->EvalOp(ActivationFn);
+          auto dit = d->Out->Outs.begin();
+          // Only insert the layer2 neurons because
+          // layer1 neurons are evaluated in this loop.
+          for (; dit != d->Out->Outs.end(); ++dit) {
+            InNeuronRefs1.insert((*dit)->Out);
+          }
+          ++ip;
+        }
+        /// @note: The output neuron might be evaluated multiple times.
+        /// but that's okay for now because it keeps the algorithm simple.
+        for(auto it = InNeuronRefs1.begin(); it != InNeuronRefs1.end(); ++it)
+          NeuronRefs.push_back(*it);
+        InNeuronRefs1.clear();
+        NeuronWeightType op;
+        while(!NeuronRefs.empty()) {
           // TODO: Optimize this. Get a pointer to the neuron being
           // inserted to and check for size() > 1 using the pointer
           // to the set. That way I can avoid a copy.
-          InNeuronRefs1 = InNeuronRefs2;
           DEBUG1(dbgs() << "\nPrinting the neurons inserted:";
-            std::for_each(InNeuronRefs2.begin(), InNeuronRefs2.end(),
+            std::for_each(NeuronRefs.begin(), NeuronRefs.end(),
               [&](NeuronType* np){ np->Print(dbgs()); dbgs() << " "; });
           );
 
-          InNeuronRefs2.clear();
-          std::for_each(InNeuronRefs1.begin(), InNeuronRefs1.end(),
+          std::for_each(NeuronRefs.begin(), NeuronRefs.end(),
               [&](NeuronType* N) {
-                N->EvalOp(ActivationFn);
+                N->EvalSig();
+                op = N->EvalOp(ActivationFn);
                 std::for_each(N->Outs.begin(), N->Outs.end(),
-                     [&](DendronType* din){ InNeuronRefs2.insert(din->Out); });
+                     [&](DendronType* din){ InNeuronRefs1.insert(din->Out); });
             });
-        };
-        assert(InNeuronRefs2.size() == 1);
-        return (*InNeuronRefs2.begin())->EvalOp(ActivationFn);
+          NeuronRefs.clear();
+          for(auto it = InNeuronRefs1.begin(); it != InNeuronRefs1.end(); ++it)
+            NeuronRefs.push_back(*it);
+          InNeuronRefs1.clear();
+        }
+        return op;
       }
 
       unsigned GetTotalLayers() const {
@@ -511,7 +553,7 @@ namespace ANN {
       void PrintNNDigraph(NeuronType& root, Stream& s,
                            const std::string& Name= "") {
         DendronsRefSetType Printed;
-        s << "digraph " << Name <<  " {\n";
+        s << "\ndigraph " << Name <<  " {\n";
         PrintNeurons(s);
         PrintConnectionsDFS(root, Printed, s);
         s << "\n}\n";
@@ -530,7 +572,11 @@ namespace ANN {
     NeuralNetwork<ActivationFnType> nn;
     auto root = nn.CreateRoot();
     auto out = nn.CreateNeuron(2, 0);
-    for (unsigned i = 0; i < NumNeurons; ++i) {
+    auto bias = nn.CreateNeuron(1, 0);
+    nn.SetOutputNeuron(*out);
+    nn.Connect(root, bias, 1.0);
+    nn.Connect(bias, out, 1.0);
+    for (unsigned i = 0; i < NumNeurons -1; ++i) {
       auto in = nn.CreateNeuron(1, 0);
       nn.Connect(root, in, 1.0);
       nn.Connect(in, out, rnd.Get());
@@ -551,15 +597,16 @@ namespace ANN {
     std::vector<NeuronsType::iterator> L2Neurons;
     auto root = nn.CreateRoot();
     auto out = nn.CreateNeuron(3, 0);
+    nn.SetOutputNeuron(*out);
     auto bias = nn.CreateNeuron(1, 0);
     // Any connection from root has to be a unit weight.
     nn.Connect(root, bias, 1.0);
-    nn.Connect(bias, out, rnd.Get());
+    nn.Connect(bias, out, 1.0);
     // Connect bias neurons to each l2 neurons,
     // and each l2 neurons to out.
     for (unsigned i = 0; i < NumNeurons -1; ++i) {
       auto l2 = nn.CreateNeuron(2, 0);
-      nn.Connect(bias, l2, rnd.Get());
+      nn.Connect(bias, l2, 1.0);
       nn.Connect(l2, out, rnd.Get());
       L2Neurons.push_back(l2);
     }
@@ -584,9 +631,12 @@ namespace ANN {
   class Trainer {
     NeuralNetworkType& NN;
     TAType TA;
+    // Keeping alpha low prevents oscillation.
+    float alpha;
+    utilities::RNG noise;
     public:
-    Trainer(NeuralNetworkType& nn)
-      : NN(nn)
+    Trainer(NeuralNetworkType& nn, DendronWeightType al)
+      : NN(nn), alpha(al), noise(-alpha/5.0, alpha/5.0)
     { }
     const TAType& GetTrainingAlgorithm() {
       return TA;
@@ -594,23 +644,45 @@ namespace ANN {
     const NeuralNetworkType& GetNeuralNetwork() const {
       return NN;
     }
+    void SetAlpha(DendronWeightType al) {
+      alpha = al;
+    }
 
     /// @todo: Put innovation number as well.
     // Training neuron means calculating the delta.
-    void TrainOutputNeuron(NeuronType* n, NeuronWeightType desired_op) {
-      TA.OutputNode(*n, desired_op, NN.GetActivationFunction());
+    void TrainOutputNeuron(NeuronType& n, NeuronWeightType desired_op) const {
+      TA.OutputNode(n, desired_op, NN.GetActivationFunction());
     }
-    void TrainHiddenNeuron(NeuronType* n) {
-      TA.HiddenNode(*n, NN.GetActivationFunction());
+    void TrainHiddenNeuron(NeuronType& n) {
+      // The second parameter (Desired output), is not used currently.
+      TA.HiddenNode(n, NeuronWeightType(0), NN.GetActivationFunction());
     }
-    void TrainDendron(DendronType *dp) {
+    void TrainDendron(DendronType& dp) {
       // weight update = alpha*input*delta
-      //dp->W += dp->dW; // for momentum.
-      dp->dW = -alpha*(dp->In->Output)*(dp->Out->dW);
-      dp->W += dp->dW;
+      //dp->dW += dp->dW + delta; // for momentum.
+      DEBUG0(dbgs() << "d.W=" << dp.W
+                    << ", x.Out=" << dp.In->Output
+                    << ", n.dW=" << dp.Out->dW);
+      // dp.dW = alpha*output(input neuron)*delta(output neuron)
+      dp.dW = -alpha*((dp.In->Output)*(dp.Out->dW));
+      dp.W += dp.dW;
+      DEBUG0(dbgs() << ", d.W'=" << dp.W << ", d.dW=" << dp.dW);
     }
-
-    /** Breadth First traversal of network
+    // In feedforward network delta for all the dendrons are the same,
+    // and equal to the delta of output neuron.
+    void TrainDendronFF(DendronType& dp, NeuronWeightType delta) {
+      // weight update = alpha*input*delta
+      //dp->dW += dp->dW + delta; // for momentum.
+      DEBUG0(dbgs() << "d.W=" << dp.W
+                    << ", x.Out=" << dp.In->Output
+                    << ", delta=" << delta);
+      // dp.dW = alpha*output(input neuron)*delta(output neuron)
+      dp.dW = -alpha*delta;
+      dp.W += dp.dW;
+      DEBUG0(dbgs() << ", d.W'=" << dp.W << ", d.dW=" << dp.dW);
+    }
+    /** Breadth First traversal of network == Feed forward training.
+      * This is good for boolean functions like AND/OR
       * @todo: Separate the training of level-1 neurons
       * in a separate loop. And then train all the subsequent
       * neurons. That would improve performance in
@@ -619,48 +691,80 @@ namespace ANN {
     template<typename InputSet, typename OutputType>
     void TrainNetwork(const InputSet& Ins, OutputType desired_op) {
       NeuronType& root = *NN.GetRoot();
+      NeuronType& out = NN.GetOutputNeuron();
       assert(root.Outs.size() == Ins.size());
-      NeuronsRefListType ToBeTrained;
+      TrainOutputNeuron(out, desired_op);
+      NeuronsRefVecType ToBeTrained;
+      NeuronsRefSetType ToBeTrained2;
       // level 1 neurons are meant only for forwarding the input.
       for (auto dp = root.Outs.begin(); dp != root.Outs.end(); ++dp) {
-        ToBeTrained.push_back((*dp)->Out);
-      }
-      //ToBeTrained.push_back(&root);
-      while (!ToBeTrained.empty()) {
-        auto r = ToBeTrained.front();        
-        for (auto dp = r->Outs.begin(); dp != r->Outs.end(); ++dp) {
-          // incrementing the feed_ip works because input-size
-          // is equal to the number of dendrons attached.
-          //TrainOutputDendron(*dp, desired_op);
-          ToBeTrained.push_back((*dp)->Out);
+        NeuronType* np = (*dp)->Out;
+        if (!IsBiasNeuron(np->Id)) {
+          auto dpl2 = np->Outs.begin();
+          for (; dpl2 != np->Outs.end(); ++dpl2) {
+            DEBUG0(dbgs() << "\nTraining d" << (*dpl2)->Id << "\t");
+            TrainDendronFF(**dpl2, out.dW);
+            ToBeTrained2.insert((*dpl2)->Out);
+          }
         }
-        ToBeTrained.pop_front();
+      }
+      for (auto it = ToBeTrained2.begin(); it != ToBeTrained2.end(); ++it)
+        ToBeTrained.push_back(*it);
+      ToBeTrained2.clear();
+
+      while (!ToBeTrained.empty()) {
+        auto nit = ToBeTrained.begin();
+        for (; nit != ToBeTrained.end(); ++nit) {
+          NeuronType* np = *nit;
+          auto dpl2 = np->Outs.begin();
+          for (; dpl2 != np->Outs.end(); ++dpl2) {
+            DEBUG0(dbgs() << "\nTraining d" << (*dpl2)->Id << "\t");
+            TrainDendronFF(**dpl2, out.dW);
+            ToBeTrained2.insert((*dpl2)->Out);
+          }
+        }
+        ToBeTrained.clear();
+        for (auto it = ToBeTrained2.begin(); it != ToBeTrained2.end(); ++it)
+          ToBeTrained.push_back(*it);
+        ToBeTrained2.clear();
       }
     }
     // Only works for scalar outputs i.e. only one output neuron.
     template<typename InputSet, typename OutputType>
-    void TrainNetworkBackProp(const InputSet& Ins, OutputType desired_op,
-                              NeuronType& out) {
+    void TrainNetworkBackProp(const InputSet& Ins, OutputType desired_op) {
       NeuronType& root = *NN.GetRoot();
+      NeuronType& out = NN.GetOutputNeuron();
       assert(root.Outs.size() == Ins.size());
-      assert(out.Outs.empty());
-      NeuronsRefListType ToBeTrained;
-      NeuronsRefSetType ToBeTrainedSet;
+
+      NeuronsRefVecType ToBeTrained;
+      NeuronsRefSetType ToBeTrained2;
       TrainOutputNeuron(out, desired_op);
-      for (auto dp = out.Ins.begin(); dp != out.Ins.end(); ++dp) {
-        ToBeTrained.push_back((*dp)->In);
-        TrainDendron(*dp);
+      for (auto di = out.Ins.begin(); di != out.Ins.end(); ++di) {
+        if (!IsBiasNeuron((*di)->In->Id)) {
+          ToBeTrained.push_back((*di)->In);
+          DEBUG0(dbgs() << "\nTraining d" << (*di)->Id << "\t");
+          TrainDendron(**di);
+        }
       }
       // train all the neurons and dendrons until the input layer.
       // assuming the network is fully connected.
-      for (auto np = ToBeTrained.begin(); np != ToBeTrained.end(); ++np) {
-        TrainHiddenNeuron(*np);
-        for (auto di = (*np)->Ins.begin(); di != (*np)->Ins.end(); ++di) {
-          DendronType* dp = *di;
-          DEBUG0(dbgs() << "\nTraining dendron:" << dp->Id);
-          TrainDendron(dp);
-          ToBeTrainedSet.insert(dp->In);
+      while (!ToBeTrained.empty()) {
+        for (auto np = ToBeTrained.begin(); np != ToBeTrained.end(); ++np) {
+          NeuronType& n = **np;
+          TrainHiddenNeuron(n);
+          for (auto di = n.Ins.begin(); di != n.Ins.end(); ++di) {
+            DendronType* dp = *di;
+            if (!IsRootNeuron(dp->In->Id) && !IsBiasNeuron(dp->In->Id)) {
+              DEBUG0(dbgs() << "\nTraining dendron:" << dp->Id << "\t");
+              TrainDendron(*dp);
+              ToBeTrained2.insert(dp->In);
+            }
+          }
         }
+        ToBeTrained.clear();
+        for(auto it = ToBeTrained2.begin(); it != ToBeTrained2.end(); ++it)
+          ToBeTrained.push_back(*it);
+        ToBeTrained2.clear();
       }
     }
   };
@@ -734,7 +838,7 @@ namespace ANN {
 
     template<typename T>
     bool Validate(Evaluate<T> eval, Inputs Ins, Output op) const {
-       return GetDesiredOutput(eval, Ins) == utilities::FloatToBool(op);
+       return GetDesiredOutput(eval, Ins) == op;
     }
   };
 } // namespace ANN
