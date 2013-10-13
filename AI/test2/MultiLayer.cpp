@@ -1,7 +1,7 @@
-#include<NeuralNetwork.h>
-#include<TypeConversions.h>
+#include "TrainingAlgorithms.h"
 
-#include<iostream>
+#include <TypeConversions.h>
+#include <iostream>
 
 using namespace ANN;
 using namespace utilities;
@@ -9,18 +9,19 @@ using namespace utilities;
 // and evaluates the output for a set of sample inputs.
 int main() {
   const int ip_size = 3;
+  Activation<NeuronWeightType>* act = new SigmoidAct<NeuronWeightType>;
   // Create a single layer feed forward neural network.
-  auto NN = CreateTLFFN<SigmoidAct<DendronWeightType>>(ip_size);
+  auto NN = CreateTLFFN(ip_size, act);
   NN.PrintNNDigraph(*NN.GetRoot(), std::cout);
   // Choose the training algorithm.
   float alpha = 0.01;
-  Trainer<decltype(NN), GradientDescent>T(NN, alpha);
+  ConvergenceMethod* CM = new GradientDescent;
+  Trainer T(NN, CM, alpha);
 
   // Validation of the output.
-  typedef ValidateOutput<decltype(NN), std::vector<bool>, bool>
-          ValidatorType;
+  typedef ValidateOutput<std::vector<bool>, bool> ValidatorType;
   ValidatorType Validator(NN);
-  typedef BoolXor CostFunction;
+  BoolXor CostFunction;
   unsigned times_trained = 0;
   train:
   T.SetAlpha(alpha);
@@ -34,9 +35,9 @@ int main() {
     //NN.PrintNNDigraph(*NN.GetRoot(), std::cout);
     auto op = NN.GetOutput(RSF);
     auto bool_op = FloatToBool(op);
-    auto desired_op = Validator.GetDesiredOutput(CostFunction(), RS);
+    auto desired_op = Validator.GetDesiredOutput(&CostFunction, RS);
     // Is the output same as desired output?
-    if (!Validator.Validate(CostFunction(), RS, bool_op)) {
+    if (!Validator.Validate(&CostFunction, RS, bool_op)) {
       DEBUG0(dbgs() << "\nLearning (" << op << ", "
                     << bool_op << ", "
                     << desired_op << ")");
@@ -62,8 +63,8 @@ int main() {
     RSF.insert(RSF.begin(), -1);
     auto op = NN.GetOutput(RSF);
     DEBUG0(dbgs() << "\nSample Inputs:"; PrintElements(dbgs(), RSF));
-    if (Validator.Validate(CostFunction(), RS, FloatToBool(op)))
-      DEBUG0(dbgs() << "\tTrained: " << op);
+    if (Validator.Validate(&CostFunction, RS, FloatToBool(op)))
+     DEBUG0(dbgs() << "\tTrained (" << op << ", " << FloatToBool(op) << ")");
     else {
       // double the training rate.
       alpha = alpha < 0.4 ? 2*alpha : alpha;
@@ -73,6 +74,7 @@ int main() {
   }
   DEBUG0(dbgs() << "\nTrained for " << times_trained << " cycles.");
   NN.PrintNNDigraph(*NN.GetRoot(), std::cout);
+  delete CM;
   return 0;
 }
 
