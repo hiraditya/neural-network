@@ -17,6 +17,7 @@ namespace OPT {
 } // namespace OPT
 
 namespace ANN {
+
   class NetworkConfiguration {
     typedef ValidateOutput<std::vector<bool>, bool> ValidatorType;
     typedef std::map<std::string, Activation<NeuronWeightType>* >
@@ -36,12 +37,14 @@ namespace ANN {
     ConvergenceMethodsType ConvergenceMethods;
     EvaluatorsType Evaluators;
     NeuralNetwork NN;
+
   public:
     typedef std::map<std::string, std::string> OptMapType;
+
     NetworkConfiguration()
-      : validated(false), T(nullptr),
-        Validator(nullptr), alpha(0.01),
+      : validated(false), T(nullptr), Validator(nullptr), alpha(0.01),
         ip_size(3), times_trained(0) {
+
       /// @todo Rather than generating by default,
       /// make the construction on-demand.
       ActivationFunctions["LinearAct"] = new LinearAct<NeuronWeightType>;
@@ -52,6 +55,7 @@ namespace ANN {
       Evaluators["BoolOr"] = new BoolOr;
       Evaluators["BoolXor"] = new BoolXor;
     }
+
     ~NetworkConfiguration() {
       if (T)
         delete T;

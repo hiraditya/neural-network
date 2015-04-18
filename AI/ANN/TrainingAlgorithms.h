@@ -14,6 +14,10 @@ namespace ANN {
                     const Activation<NeuronWeightType>& act) const = 0;
     virtual void HiddenNode(NeuronType& n, NeuronWeightType desired_op,
                     const Activation<NeuronWeightType>& act) const = 0;
+
+    /// FIXME: Do we even need a virtual destructor in this case?
+    virtual ~ConvergenceMethod()
+    { }
   };
 
   struct GradientDescent : public ConvergenceMethod {
@@ -21,7 +25,7 @@ namespace ANN {
                     const Activation<NeuronWeightType>& act) const {
       auto error = (n.Output - desired_op);
       // mean square error
-      /// @todo Optimize when activation is tanh, in that case
+      /// @todo: Optimize when activation is tanh, in that case
       /// n.dW = 2*error*(1-n.Output*n.Output);
       n.dW = 2*error*act.Deriv(n.W);
     }
@@ -33,7 +37,7 @@ namespace ANN {
       for (auto it = n.Outs.begin(); it != n.Outs.end(); ++it) {
         n.dW += ((*it)->W)*((*it)->Out->dW);
       }
-      /// @todo Optimize when activation is tanh, in that case
+      /// @todo: Optimize when activation is tanh, in that case
       /// n.dW = n.dW*(1-n.Output*n.Output);
       n.dW = (n.dW)*(act.Deriv(n.W));
     }
@@ -44,7 +48,7 @@ namespace ANN {
                     const Activation<NeuronWeightType>& act) const {
       auto error = (n.Output - desired_op);
       // mean square error
-      /// @todo Optimize when activation is tanh, in that case
+      /// @todo: Optimize when activation is tanh, in that case
       /// n.dW = 2*error*(1-n.Output*n.Output);
       n.dW = 2*error*act.Deriv(n.W);
     }
@@ -66,7 +70,8 @@ namespace ANN {
     // Keeping alpha low prevents oscillation.
     float alpha;
     utilities::RNG noise;
-    public:
+
+  public:
     Trainer(NeuralNetwork& nn, ConvergenceMethod* cm, DendronWeightType al)
       : NN(nn), CM(cm), alpha(al), noise(-alpha/5.0, alpha/5.0)
     { }
@@ -74,9 +79,11 @@ namespace ANN {
     const ConvergenceMethod& GetTrainingAlgorithm() {
       return *CM;
     }
+
     const NeuralNetwork& GetNeuralNetwork() const {
       return NN;
     }
+
     void SetAlpha(DendronWeightType al) {
       alpha = al;
     }
@@ -86,10 +93,12 @@ namespace ANN {
     void TrainOutputNeuron(NeuronType& n, NeuronWeightType desired_op) const {
       CM->OutputNode(n, desired_op, NN.GetActivationFunction());
     }
+
     void TrainHiddenNeuron(NeuronType& n) {
       // The second parameter (Desired output), is not used currently.
       CM->HiddenNode(n, NeuronWeightType(0), NN.GetActivationFunction());
     }
+
     void TrainDendron(DendronType& dp) {
       // weight update = alpha*input*delta
       //dp->dW += dp->dW + delta; // for momentum.
@@ -101,6 +110,7 @@ namespace ANN {
       dp.W += dp.dW;
       DEBUG0(dbgs() << ", d.W'=" << dp.W << ", d.dW=" << dp.dW);
     }
+
     // In feedforward network delta for all the dendrons are the same,
     // and equal to the delta of output neuron.
     void TrainDendronFF(DendronType& dp, NeuronWeightType delta) {
@@ -114,6 +124,7 @@ namespace ANN {
       dp.W += dp.dW;
       DEBUG0(dbgs() << ", d.W'=" << dp.W << ", d.dW=" << dp.dW);
     }
+
     /** Breadth First traversal of network == Feed forward training.
       * This is good for boolean functions like AND/OR
       * @todo: Separate the training of level-1 neurons
@@ -162,6 +173,7 @@ namespace ANN {
         ToBeTrained2.clear();
       }
     }
+
     // Only works for scalar outputs i.e. only one output neuron.
     template<typename InputSet, typename OutputType>
     void TrainNetworkBackProp(const InputSet& Ins, OutputType desired_op) {

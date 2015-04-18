@@ -16,8 +16,9 @@
 #include <cassert>
 #include <numeric>
 #include <cmath>
+
 /**
- * TODO: Serialization
+ * @todo: Serialization
  * Abstract breadth first traversal from train-network and
  * depth first traversal from print-network.
  * Facility to report statistics. Helper class that one could
@@ -43,13 +44,16 @@ namespace ANN {
   inline bool IsRootNeuron(IdType Id) {
     return Id == 0;
   }
+
   inline bool IsOutNeuron(IdType Id) {
     return Id == 1;
   }
+
   inline bool IsBiasNeuron(IdType Id) {
     return Id == 2;
   }
-  // @todo Reimplement this.
+
+  // @todo: Reimplement this.
   IdType GetNewId() {
     static IdType ID = 0;
     return ID++;
@@ -478,7 +482,7 @@ namespace ANN {
         InNeuronRefs1.clear();
         NeuronWeightType op;
         while(!NeuronRefs.empty()) {
-          // TODO: Optimize this. Get a pointer to the neuron being
+          /// @todo: Optimize this. Get a pointer to the neuron being
           // inserted to and check for size() > 1 using the pointer
           // to the set. That way I can avoid a copy.
           DEBUG1(dbgs() << "\nPrinting the neurons inserted:";
@@ -530,7 +534,7 @@ namespace ANN {
           ni->Print(s);
       }
 
-      // @todo: Put innovation number as well.
+      /// @todo: Put innovation number as well.
       template<typename Stream>
       void PrintDendron(Stream& s, DendronType& d) {
         s << "\n\tn" << d.In->Id

@@ -1,5 +1,6 @@
 #ifndef ANN_ACTIVATION_FUNCTION_H
 #define ANN_ACTIVATION_FUNCTION_H
+
 #include <Debug.h>
 #include <cmath>
 
@@ -8,14 +9,19 @@ namespace ANN {
   template<typename WeightType>
   class Activation {
     public:
-      // @TODO: Try this: T operator()(T t) {
+      /// @todo: Try this: T operator()(T t) {
       // FAQ: Even if I do not write this function as
       // template of WeightType and put T instead of WeightType, it works.
       // I don't quite understand why?
       //
       virtual WeightType Act(WeightType t) const = 0;
+
       // Derivative of linear activation function w.r.t. weight.
       virtual WeightType Deriv(WeightType t) const = 0;
+
+      /// FIXME: Do we even need a virtual destructor in this case?
+      virtual ~Activation()
+      { }
   };
 
   template<typename WeightType>
